@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 
@@ -110,6 +111,6 @@ if __name__ == "__main__":
     cv2.imshow(f"Rasterized", image)
     image = draw_bounding_boxes_and_remove(image)
     cv2.imshow(f"Image {n_colors}", image)
-    #print_all_colors_in_image(image)
+    print_all_colors_in_image(image)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
