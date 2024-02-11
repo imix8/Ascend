@@ -1,171 +1,217 @@
-from taipy.gui import Gui, notify
+"""
+A single-page Taipy application.
+
+Please refer to https://docs.taipy.io/en/latest/manuals/gui/ for more details.
+"""
+
 from PIL import Image
-from io import BytesIO
+from taipy.gui import Gui, Markdown, notify
+from pages.root import *
+from models.pose import *
+import zipfile
+import numpy as np
+import os, shutil
 import cv2
-import create_data_files
+from models.edge_detection import *
 
 
-path_upload = ""
-path_download = ""
 
-original_video = None
-processed_video = None
-fixed = False
-data_id = 0
-slider_value = 15
+home_md = """<|toggle|theme|>
 
-page = """<|toggle|theme|>
-
-<page|layout|columns=300px 1fr|
+<page|layout|columns=350px 1fr|
 <|sidebar|
-### Analyzing your **Climb**{: .color-primary} from a video
+
+<|./images/logo.png|image|>
+
+<br/>
+### Analyze your **Climb**{: .color-primary} from a .mp4 video
 
 <br/>
 Video Upload
-<|file_selector|on_action=upload_video|extensions=.mp4|label=Upload Climb Here!|>
+<|{video_path}|file_selector|on_action=upload_video|extensions=.mp4|label=Upload Climb Here!|>
 
 <br/>
 Video Download
-<|file_download|label=Download Climb Here!|active={fixed}|>
+<|{export_path}|file_download|label=Download Climb Here!|active={fixed}|on_action=download_package|>
 |>
 
 <|container|
-# **ASCEND**{: .color-primary}
+# **DATA**{: .color-primary}
 
 Give it a try by uploading a video to witness the intricacies of your climb! You can download the processed video in full quality from the sidebar to view. 🧗🏻
 <br/>
 
-<videos|layout|columns=1 1|
-<col1|card text-center|part|render={fixed}|
-### Original Video 📷 
-<|{original_video}|video|>
-|col1>
+### Processing Video 📷 
+<|{in_process}|image|>
 
-<col2|card text-center|part|render={fixed}|
-### Processed Video 🔧 
-<|{processed_video}|video|>
-|col2>
-|videos>
+### Center of Mass ⚖️
+<|{com_img}|image|>
+
+<|{com_path_img}|image|>
+
+### Utilized Holds 🤙 
+ <|{out_utilized_holds}|image|>
 
 |>
+
 |page>
 """
 
-# <!-- Slider input added here -->
-# <br/>
-# Set Number of Hold Colors
-# <|slider|min=0|max=100|value={slider_value}|on_change=set_slider_value|label=Adjust Quality:|>
-# # |>
+video_path = ""
+export_path = ""
+in_process = ''
+com_img = ''
+com_path_img = ''
+out_utilized_holds = '' 
+fixed = False
+home = Markdown(home_md)
 
-# <|container|text-center|
-# <jpg src='logo.jpg' alt='Ascend Logo' style='max-width: 100%; height: auto;'>
-# |container>
+# function to overlay image 2 over image 1 with alpha
+def overlay_image_alpha(img1, img2, alpha=0.5):
+    img1 = img1.astype(float)
+    img2 = img2.astype(float)
+    weighted_sum = cv2.addWeighted(img1, 1, img2, 1 - alpha, 0)
+    return weighted_sum
 
-# def set_slider_value(state, value):
-#     global slider_value
-#     state.slider_value = value
-#     notify(state, 'success', 'Number set successfully!')
+def plot_circle_at_xy(xy, image):
+    x, y = xy
+    cv2.circle(image, (x, y), 10, (0, 0, 255), -1)
+    return image
 
+def plot_line_between_xy(xy1, xy2, image, color):
+    cv2.line(image, xy1, xy2, color, thickness=5)
+    return image
 
-def upload_video(state, file_info):
-    global data_id, path_download, original_video, processed_video, fixed
-    data_id += 1
+def draw_square_at_bounding_box(xy, image, color):
+    x, y, w, h = xy
+    cv2.rectangle(image, (x, y), (x + w, y + h), color, 5)
+    return image
 
+def upload_video(state):
     notify(state, 'info', 'Uploading original video...')
-    video_content = file_info['content']
-    path_upload = f'data_{data_id}.mp4'
-    with open(path_upload, 'wb') as file:
-        file.write(video_content)
+    notify(state, 'info', 'Processing climb...')
+    if os.path.exists("saves"):
+        shutil.rmtree("saves")
+    os.mkdir("saves")
+    n_colors = 3
+    holds_image = get_first_frame(state.video_path)
+    cv2.imwrite('saves/base.jpg', holds_image)
+    base = cv2.imread("saves/base.jpg")
+    cv2.imwrite('saves/com_path.jpg', holds_image)
+    holds_image = apply_kmeans_image_tracing(holds_image, n_colors=n_colors)
+    holds_image = apply_kmeans_image_tracing(draw_bounding_boxes_and_remove(holds_image),n_colors=n_colors,saturation_scale=1,value_scale=1)
+    holds_image_masks = get_masks(holds_image)
+    processed_boxes = []
 
-    # path_download = f'./post_data/data_{data_id}_processed.mp4'
-    # notify(state, 'info', 'Processing climb...')
-    # create_data_files.process_video(path_upload)
+    results = predict_pose(state.video_path)
+    for i, r in enumerate(results):
+        keypoints_coords = r.keypoints.xy
+        x_col = keypoints_coords[0][:, :1]
+        non_zero_x = x_col[x_col != 0]
+        x_average = non_zero_x.mean()
+        y_col = keypoints_coords[0][:, 1:]
+        non_zero_y = y_col[y_col != 0]
+        
+        y_average = non_zero_y.mean()
+        im_array = r.plot()
+        im = Image.fromarray(im_array[..., ::-1])
+        im.save(f'saves/holds-{i}.jpg')
+        holds = cv2.imread(f'saves/holds-{i}.jpg')
+
+        im_array = r.plot(img=base, boxes=False)
+        im = Image.fromarray(im_array[..., ::-1])
+        im.save(f'saves/balance-{i}.jpg')
+        balance = cv2.imread(f'saves/balance-{i}.jpg')
+        if (non_zero_y.size(dim=0) > 1) and (non_zero_x.size(dim=0) == non_zero_y.size(dim=0)):
+            maximum = np.argpartition(non_zero_y, -2)[-2:]
+            # draw foot line
+            xy1 = (int(non_zero_x[maximum][0]), int(non_zero_y[maximum][0]))
+            xy2 = (int(non_zero_x[maximum][1]), int(non_zero_y[maximum][1]))
+            balance = plot_line_between_xy(xy1, xy2, balance, (128, 128, 128))
+
+
+        mask_num = 1
+        bounding_boxes = find_bounding_boxes_from_mask(holds_image_masks[mask_num])
+        if not (np.isnan(x_average) or np.isnan(y_average)):
+            com = (int(x_average.item()), int(y_average.item()))
+            com_path = cv2.imread('saves/com_path.jpg')
+            cv2.imwrite('saves/com_path.jpg', plot_circle_at_xy(com, com_path))
+            holds = plot_circle_at_xy(com, holds)
+            balance = plot_circle_at_xy(com, balance)
+
+            # draw line from com to foot line
+            if (non_zero_y.size(dim=0) > 1) and (non_zero_x.size(dim=0) == non_zero_y.size(dim=0)):
+                xy2 = (int(x_average.item()), int(non_zero_y[maximum][0]))
+                x_max = np.sort(non_zero_x[maximum])
+                color = (0, 255, 0) if com[0] > x_max[0] and com[0] < x_max[1] else (0, 0, 255)
+                balance = plot_line_between_xy(com, xy2, balance, color)
+            
+            for x in x_col:
+                for y in y_col:
+                    if not (np.isnan(x) or np.isnan(y)):
+                        com = (int(x.item()), int(y.item()))
+                        for box in bounding_boxes:
+                            if com[0] > box[0] and com[0] < box[0] + box[2] and com[1] > box[1] and com[1] < box[1] + box[3]:
+                                holds = draw_square_at_bounding_box(box, holds, (255, 255, 255))
+                                if box not in processed_boxes:
+                                    processed_boxes.append(box)
+            cv2.imwrite(f'saves/holds-{i}.jpg', holds)
+        
+        cv2.imwrite(f'saves/balance-{i}.jpg', balance)
+
+        state.in_process = f'saves/holds-{i}.jpg'
+        state.com_img = f'saves/balance-{i}.jpg'
+            
+    all_boxes = find_bounding_boxes_from_mask(holds_image_masks[1])
+    for box in all_boxes:
+        if box not in processed_boxes:
+            base = draw_square_at_bounding_box(box, base, (0, 0, 255))
+        else:
+            base = draw_square_at_bounding_box(box, base, (0, 255, 0))
+    cv2.imwrite("saves/utilized_holds.jpg", base)
+
+    state.out_utilized_holds = "saves/utilized_holds.jpg"
+    state.com_path_img = "saves/com_path.jpg"
+    state.fixed = True
+
+    if os.path.exists("exports"):
+        shutil.rmtree("exports")
+    os.mkdir("exports")
+
+    balance_imgs = sorted([img for img in sorted(os.listdir("saves"), key=len) if img[0:7] == "balance" and img.endswith(".jpg")], key=len)
+    holds_imgs = sorted([img for img in os.listdir("saves") if img[0:5] == "holds" and img.endswith(".jpg")], key=len)  
+
+    generate_video("saves", "balance.mp4", balance_imgs)
+    generate_video("saves", "holds.mp4", holds_imgs)
+    shutil.copyfile('saves/com_path.jpg', 'exports/com_path.jpg')
+    shutil.copyfile('saves/utilized_holds.jpg', 'exports/utilized_holds.jpg')
+    shutil.make_archive('exports', 'zip', 'exports')
+    state.export_path = 'exports.zip'
+
+def generate_video(path, name, images):
+    frame = cv2.imread(os.path.join(path, images[0]))
+    height, width, layers = frame.shape
     
-    # path_download = processed_video
-    # notify(state, 'success', 'Climb processed successfully!')
-    # state.fixed = True
-    # state.path_upload = path_upload
-    # state.path_download = path_download
+    video = cv2.VideoWriter(f"exports/{name}", 0, 30, (width,height))
 
-if __name__ == '__main__':
-    Gui(page=page).run(margin="0px", title='ASCEND: Climb Analysis Tool', upload_folder="pre_data/")
-
-
-# from taipy.gui import Gui, notify
-# from rembg import remove
-# from PIL import Image
-# from io import BytesIO
-
-
-# path_upload = ""
-# path_download = "fixed_img.png"
-# original_image = None
-# fixed_image = None
-# fixed = False
-
-
-# page = """<|toggle|theme|>
-
-# <page|layout|columns=300px 1fr|
-# <|sidebar|
-# ### Removing **Background**{: .color-primary} from your image
-
-# <br/>
-# Upload and download
-# <|{path_upload}|file_selector|on_action=fix_image|extensions=.png,.jpg|label=Upload original image|>
-
-# <br/>
-# Download it here
-# <|{path_download}|file_download|label=Download fixed image|active={fixed}|>
-# |>
-
-# <|container|
-# # Image Background **Eliminator**{: .color-primary}
-
-# 🐶 Give it a try by uploading an image to witness the seamless removal of the background. You can download images in full quality from the sidebar.
-# This code is open source and accessible on [GitHub](https://github.com/Avaiga/demo-remove-background).
-# <br/>
-
-
-# <images|layout|columns=1 1|
-# <col1|card text-center|part|render={fixed}|
-# ### Original Image 📷 
-# <|{original_image}|image|>
-# |col1>
-
-# <col2|card text-center|part|render={fixed}|
-# ### Fixed Image 🔧 
-# <|{fixed_image}|image|>
-# |col2>
-# |images>
-
-# |>
-# |page>
-# """
-
-
-# def convert_image(img):
-#     buf = BytesIO()
-#     img.save(buf, format="PNG")
-#     byte_im = buf.getvalue()
-#     return byte_im
-
-
-# def fix_image(state):
-#     notify(state, 'info', 'Uploading original image...')
-#     image = Image.open(state.path_upload)
+    for image in images:
+        video.write(cv2.imread(os.path.join(path, image)))
     
-#     notify(state, 'info', 'Removing the background...')
-#     fixed_image = remove(image)
-#     fixed_image.save("fixed_img.png")
+    cv2.destroyAllWindows()
+    video.release()
 
-#     notify(state, 'success', 'Background removed successfully!')
-#     state.original_image = convert_image(image)
-#     state.fixed_image = convert_image(fixed_image)
-#     state.fixed = True
+def download_package(state):
+    shutil.rmtree("saves")
+    shutil.rmtree("exports")
+    os.remove("exports.zip")
+    state.fixed = False
 
-# if __name__ == "__main__":
-#     Gui(page=page).run(margin="0px", title='Background Remover')
 
-# if __name__ == '__main__':
-#     main()
+if __name__ == "__main__":
+    pages = {
+        "/": root_page,
+        "home": home,
+    }
+    gui = Gui(pages=pages)
+    gui.md = ""
+    gui.run(title="Ascend", use_reloader=True, upload_folder="uploads/", port=8000)
