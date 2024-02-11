@@ -242,5 +242,4 @@ if __name__ == "__main__":
     }
     gui = Gui(pages=pages)
     gui.md = ""
-    gui._config['DEBUG'] = False
     gui.run(title="Ascend", use_reloader=True, upload_folder="uploads/", host='0.0.0.0', port=80, debug=False)
