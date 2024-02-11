@@ -18,7 +18,7 @@ def process_video(file_name):
             x_mean = mean_exclude_zeros(x_coords)
             y_mean = mean_exclude_zeros(y_coords)
             keypoints['mean'] = {'x': x_mean, 'y': y_mean}
-    with open(f'{path}/{file_name.split(".")[0]}_{len(dict)}.json', 'w') as file:
+    with open(f'{path}/{file_name.split(".")[0]}_processed.json', 'w') as file:
         json.dump(dict, file)
 
 def mean_exclude_zeros(numbers):
