@@ -8,9 +8,9 @@ from PIL import Image
 from taipy.gui import Gui, Markdown, notify
 from pages.root import *
 from models.pose import *
-import torch
+import zipfile
 import numpy as np
-import os
+import os, shutil
 import cv2
 from models.edge_detection import *
 
@@ -32,7 +32,7 @@ Video Upload
 
 <br/>
 Video Download
-<|file_download|label=Download Climb Here!|active={fixed}|>
+<|{export_path}|file_download|label=Download Climb Here!|active={fixed}|on_action=download_package|>
 |>
 
 <|container|
@@ -47,6 +47,8 @@ Give it a try by uploading a video to witness the intricacies of your climb! You
 ### Center of Mass ⚖️
 <|{com_img}|image|>
 
+<|{com_path_img}|image|>
+
 ### Utilized Holds 🤙 
  <|{out_utilized_holds}|image|>
 
@@ -56,8 +58,10 @@ Give it a try by uploading a video to witness the intricacies of your climb! You
 """
 
 video_path = ""
+export_path = ""
 in_process = ''
 com_img = ''
+com_path_img = ''
 out_utilized_holds = '' 
 fixed = False
 home = Markdown(home_md)
@@ -86,10 +90,14 @@ def draw_square_at_bounding_box(xy, image, color):
 def upload_video(state):
     notify(state, 'info', 'Uploading original video...')
     notify(state, 'info', 'Processing climb...')
-
+    if os.path.exists("saves"):
+        shutil.rmtree("saves")
+    os.mkdir("saves")
     n_colors = 3
     holds_image = get_first_frame(state.video_path)
-    cv2.imwrite('base.jpg', holds_image)
+    cv2.imwrite('saves/base.jpg', holds_image)
+    base = cv2.imread("saves/base.jpg")
+    cv2.imwrite('saves/com_path.jpg', holds_image)
     holds_image = apply_kmeans_image_tracing(holds_image, n_colors=n_colors)
     holds_image = apply_kmeans_image_tracing(draw_bounding_boxes_and_remove(holds_image),n_colors=n_colors,saturation_scale=1,value_scale=1)
     holds_image_masks = get_masks(holds_image)
@@ -107,35 +115,36 @@ def upload_video(state):
         y_average = non_zero_y.mean()
         im_array = r.plot()
         im = Image.fromarray(im_array[..., ::-1])
-        im.save(f'temp-{i}.jpg')
-        img = cv2.imread(f'temp-{i}.jpg')
+        im.save(f'saves/holds-{i}.jpg')
+        holds = cv2.imread(f'saves/holds-{i}.jpg')
 
-        base = cv2.imread("base.jpg")
         im_array = r.plot(img=base, boxes=False)
         im = Image.fromarray(im_array[..., ::-1])
-        im.save(f'base-{i}.jpg')
-        base = cv2.imread(f'base-{i}.jpg')
+        im.save(f'saves/balance-{i}.jpg')
+        balance = cv2.imread(f'saves/balance-{i}.jpg')
         if (non_zero_y.size(dim=0) > 1) and (non_zero_x.size(dim=0) == non_zero_y.size(dim=0)):
             maximum = np.argpartition(non_zero_y, -2)[-2:]
             # draw foot line
             xy1 = (int(non_zero_x[maximum][0]), int(non_zero_y[maximum][0]))
             xy2 = (int(non_zero_x[maximum][1]), int(non_zero_y[maximum][1]))
-            base = plot_line_between_xy(xy1, xy2, base, (128, 128, 128))
+            balance = plot_line_between_xy(xy1, xy2, balance, (128, 128, 128))
 
 
         mask_num = 1
         bounding_boxes = find_bounding_boxes_from_mask(holds_image_masks[mask_num])
         if not (np.isnan(x_average) or np.isnan(y_average)):
             com = (int(x_average.item()), int(y_average.item()))
-            img = plot_circle_at_xy(com, img)
-            base = plot_circle_at_xy(com, base)
+            com_path = cv2.imread('saves/com_path.jpg')
+            cv2.imwrite('saves/com_path.jpg', plot_circle_at_xy(com, com_path))
+            holds = plot_circle_at_xy(com, holds)
+            balance = plot_circle_at_xy(com, balance)
 
             # draw line from com to foot line
             if (non_zero_y.size(dim=0) > 1) and (non_zero_x.size(dim=0) == non_zero_y.size(dim=0)):
                 xy2 = (int(x_average.item()), int(non_zero_y[maximum][0]))
                 x_max = np.sort(non_zero_x[maximum])
                 color = (0, 255, 0) if com[0] > x_max[0] and com[0] < x_max[1] else (0, 0, 255)
-                base = plot_line_between_xy(com, xy2, base, color)
+                balance = plot_line_between_xy(com, xy2, balance, color)
             
             for x in x_col:
                 for y in y_col:
@@ -143,29 +152,60 @@ def upload_video(state):
                         com = (int(x.item()), int(y.item()))
                         for box in bounding_boxes:
                             if com[0] > box[0] and com[0] < box[0] + box[2] and com[1] > box[1] and com[1] < box[1] + box[3]:
-                                img = draw_square_at_bounding_box(box, img, (255, 255, 255))
+                                holds = draw_square_at_bounding_box(box, holds, (255, 255, 255))
                                 if box not in processed_boxes:
                                     processed_boxes.append(box)
-            cv2.imwrite(f'temp-{i}.jpg', img)
+            cv2.imwrite(f'saves/holds-{i}.jpg', holds)
         
-        cv2.imwrite(f'base-{i}.jpg', base)
+        cv2.imwrite(f'saves/balance-{i}.jpg', balance)
 
-        state.in_process = f'temp-{i}.jpg'
-        state.com_img = f'base-{i}.jpg'
-        if os.path.exists(f"temp-{i-1}.jpg"):
-            os.remove(f"temp-{i-1}.jpg")
-            os.remove(f"base-{i-1}.jpg")
+        state.in_process = f'saves/holds-{i}.jpg'
+        state.com_img = f'saves/balance-{i}.jpg'
             
-    base = cv2.imread('base.jpg')
     all_boxes = find_bounding_boxes_from_mask(holds_image_masks[1])
     for box in all_boxes:
         if box not in processed_boxes:
             base = draw_square_at_bounding_box(box, base, (0, 0, 255))
         else:
             base = draw_square_at_bounding_box(box, base, (0, 255, 0))
-    cv2.imwrite("base.jpg", base)
+    cv2.imwrite("saves/utilized_holds.jpg", base)
 
-    state.out_utilized_holds = "base.jpg"
+    state.out_utilized_holds = "saves/utilized_holds.jpg"
+    state.com_path_img = "saves/com_path.jpg"
+    state.fixed = True
+
+    if os.path.exists("exports"):
+        shutil.rmtree("exports")
+    os.mkdir("exports")
+
+    balance_imgs = sorted([img for img in sorted(os.listdir("saves"), key=len) if img[0:7] == "balance" and img.endswith(".jpg")], key=len)
+    holds_imgs = sorted([img for img in os.listdir("saves") if img[0:5] == "holds" and img.endswith(".jpg")], key=len)  
+
+    generate_video("saves", "balance.mp4", balance_imgs)
+    generate_video("saves", "holds.mp4", holds_imgs)
+    shutil.copyfile('saves/com_path.jpg', 'exports/com_path.jpg')
+    shutil.copyfile('saves/utilized_holds.jpg', 'exports/utilized_holds.jpg')
+    shutil.make_archive('exports', 'zip', 'exports')
+    state.export_path = 'exports.zip'
+
+def generate_video(path, name, images):
+    frame = cv2.imread(os.path.join(path, images[0]))
+    height, width, layers = frame.shape
+    
+    video = cv2.VideoWriter(f"exports/{name}", 0, 30, (width,height))
+
+    for image in images:
+        video.write(cv2.imread(os.path.join(path, image)))
+    
+    cv2.destroyAllWindows()
+    video.release()
+
+def download_package(state):
+    shutil.rmtree("saves")
+    shutil.rmtree("exports")
+    os.remove("exports.zip")
+    state.fixed = False
+
 
 if __name__ == "__main__":
     pages = {
