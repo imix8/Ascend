@@ -242,4 +242,4 @@ if __name__ == "__main__":
     }
     gui = Gui(pages=pages)
     gui.md = ""
-    gui.run(title="Ascend", use_reloader=True, upload_folder="uploads/", port=8000)
+    gui.run(title="Ascend", use_reloader=True, upload_folder="uploads/", host='0.0.0.0', port=80)
