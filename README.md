@@ -52,9 +52,13 @@ Ascend is designed to provide climbers with detailed insights into their climbin
    python main.py
    ```
 1b. An alternative is to go to the IP_ADDR with: "ascend-climbing.tech."
+
 2. Open a web browser and navigate to `http://localhost:8000` to access the GUI.
+   
 3. Upload a climbing video in .mp4 format using the "Upload Climb Here!" button.
+   
 4. The analysis will begin automatically after the video is uploaded.  Progress notifications will appear in the lower left of the GUI to provide status.
+   
 5. Once the analysis is complete, downloading the processed videos and other output image will be possible using the "Download Climb Here!" from the sidebar.
 
 ## Technical Design Architecture
