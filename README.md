@@ -61,7 +61,7 @@ The project is structured around a single-page Taipy GUI application, with the b
 1. **Edge Detection**:  We used open-cv's edge detection algorithm to detect the edges of climbing holds.  The image was first rasterized into discrete colors to simplify the process of detecting climbing hold edges  and also to split up each colored hold into different image masks.
 
 2. **Image masks**:  The image masks used edge detection once again to get the bounding boxes of the holds.  We could then detect whether or not a persons hand, foot, or limb was touching a climbing hold by checking if its position is inside the bounding box.
-3. 
+ 
 <img width="225" alt="pic4" src="https://github.com/imix8/Ascend/assets/112455598/a77da975-49a4-4acd-a0f4-d2e3032f405b">
 
 ## Development and Contribution
