@@ -12,6 +12,8 @@ website/runs/
 website/yolov8m-pose.pt
 website/*.jpg
 website/.data/
+
+uploads/*
 yolov8m-pose.pt
 
 # Distribution / packaging
