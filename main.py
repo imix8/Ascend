@@ -15,6 +15,7 @@ import cv2
 from models.edge_detection import *
 
 
+# Markdown template for the home page
 
 home_md = """<|toggle|theme|>
 
@@ -73,21 +74,38 @@ def overlay_image_alpha(img1, img2, alpha=0.5):
     weighted_sum = cv2.addWeighted(img1, 1, img2, 1 - alpha, 0)
     return weighted_sum
 
+# function that takes in an image array and an xy coordinate to plot a circle at that point
 def plot_circle_at_xy(xy, image):
     x, y = xy
     cv2.circle(image, (x, y), 10, (0, 0, 255), -1)
     return image
 
+# function that takes in an image array and a color and draws a line between two coordinates
 def plot_line_between_xy(xy1, xy2, image, color):
     cv2.line(image, xy1, xy2, color, thickness=5)
     return image
 
+# function that takes in an image array and a color and draws a box using the specified coordinates and size
 def draw_square_at_bounding_box(xy, image, color):
     x, y, w, h = xy
     cv2.rectangle(image, (x, y), (x + w, y + h), color, 5)
     return image
 
+"""
+function to process uploaded video.
+processing involves the following steps:
+1. Run YOLOv8 Pose Task on the video
+2. Calculate the average Keypoint positions for every frame and update frame (CoM)
+3. Identify the potential holds for route
+4. Find line between feet keypoints and draw line from CoM to line
+5. Keep track of holds that were visited
+
+Once all of that has been processed and annotated, the files are saved to specific directories then processed into a video
+The videos and pictures are then saved to an archive to download, if the user wishes
+"""
 def upload_video(state):
+
+    # setting up for processing
     notify(state, 'info', 'Uploading original video...')
     notify(state, 'info', 'Processing climb...')
     if os.path.exists("saves"):
@@ -103,8 +121,11 @@ def upload_video(state):
     holds_image_masks = get_masks(holds_image)
     processed_boxes = []
 
+    # runs the pose model on uploaded video 
     results = predict_pose(state.video_path)
     for i, r in enumerate(results):
+
+        # extracting necessary keypoint coordinates
         keypoints_coords = r.keypoints.xy
         x_col = keypoints_coords[0][:, :1]
         non_zero_x = x_col[x_col != 0]
@@ -122,6 +143,8 @@ def upload_video(state):
         im = Image.fromarray(im_array[..., ::-1])
         im.save(f'saves/balance-{i}.jpg')
         balance = cv2.imread(f'saves/balance-{i}.jpg')
+
+        # this check ensures that the full body is present and the x and y coordinates are the same size
         if (non_zero_y.size(dim=0) > 1) and (non_zero_x.size(dim=0) == non_zero_y.size(dim=0)):
             maximum = np.argpartition(non_zero_y, -2)[-2:]
             # draw foot line
@@ -129,7 +152,8 @@ def upload_video(state):
             xy2 = (int(non_zero_x[maximum][1]), int(non_zero_y[maximum][1]))
             balance = plot_line_between_xy(xy1, xy2, balance, (128, 128, 128))
 
-
+        # getting bounding boxes for all the holds and trying to calculate if the climber is near a hold
+        # this part is also is in charge of adding the average point to the images itself
         mask_num = 1
         bounding_boxes = find_bounding_boxes_from_mask(holds_image_masks[mask_num])
         if not (np.isnan(x_average) or np.isnan(y_average)):
@@ -161,7 +185,8 @@ def upload_video(state):
 
         state.in_process = f'saves/holds-{i}.jpg'
         state.com_img = f'saves/balance-{i}.jpg'
-            
+
+    # this generates the final image     
     all_boxes = find_bounding_boxes_from_mask(holds_image_masks[1])
     for box in all_boxes:
         if box not in processed_boxes:
@@ -178,6 +203,7 @@ def upload_video(state):
         shutil.rmtree("exports")
     os.mkdir("exports")
 
+    # preparing archive for download
     balance_imgs = sorted([img for img in sorted(os.listdir("saves"), key=len) if img[0:7] == "balance" and img.endswith(".jpg")], key=len)
     holds_imgs = sorted([img for img in os.listdir("saves") if img[0:5] == "holds" and img.endswith(".jpg")], key=len)  
 
@@ -188,6 +214,7 @@ def upload_video(state):
     shutil.make_archive('exports', 'zip', 'exports')
     state.export_path = 'exports.zip'
 
+# helper function to create video from list of image names
 def generate_video(path, name, images):
     frame = cv2.imread(os.path.join(path, images[0]))
     height, width, layers = frame.shape
@@ -200,6 +227,7 @@ def generate_video(path, name, images):
     cv2.destroyAllWindows()
     video.release()
 
+# cleans up directories after archive has been deleted
 def download_package(state):
     shutil.rmtree("saves")
     shutil.rmtree("exports")
