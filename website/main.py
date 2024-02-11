@@ -18,9 +18,13 @@ from models.edge_detection import *
 
 home_md = """<|toggle|theme|>
 
-<page|layout|columns=300px 1fr|
+<page|layout|columns=350px 1fr|
 <|sidebar|
-### Analyzing your **Climb**{: .color-primary} from a video
+
+<|./images/logo.png|image|>
+
+<br/>
+### Analyze your **Climb**{: .color-primary} from a .mp4 video
 
 <br/>
 Video Upload
@@ -32,16 +36,16 @@ Video Download
 |>
 
 <|container|
-# **ASCEND**{: .color-primary}
-
-Give it a try by uploading a video to witness the intricacies of your climb! You can download the processed video in full quality from the sidebar to view. 🧗🏻
-<br/>
-
-
+# **DATA**{: .color-primary}
 ### Processing Video 📷 
  <|{in_process}|image|>
 
+<br/>
+### Utilized Holds 🤙⚖️ 
+ <|{out_utilized_holds}|image|>
+
 |>
+
 |page>
 """
 
@@ -62,6 +66,7 @@ Give it a try by uploading a video to witness the intricacies of your climb! You
 # """
 video_path = ""
 in_process = ''
+out_utilized_holds = '' 
 fixed = False
 home = Markdown(home_md)
 
@@ -78,9 +83,9 @@ def plot_circle_at_xy(xy, image_path):
     cv2.circle(image, (x, y), 10, (0, 0, 255), -1)
     return image
 
-def draw_square_at_bounding_box(xy, image):
+def draw_square_at_bounding_box(xy, image, color):
     x, y, w, h = xy
-    cv2.rectangle(image, (x, y), (x + w, y + h), (255, 255, 255), 5)
+    cv2.rectangle(image, (x, y), (x + w, y + h), color, 5)
     return image
 
 def begin_analyze(state):
@@ -102,9 +107,11 @@ def upload_video(state):
 
     n_colors = 3
     holds_image = get_first_frame(state.video_path)
+    cv2.imwrite('base.jpg', holds_image)
     holds_image = apply_kmeans_image_tracing(holds_image, n_colors=n_colors)
     holds_image = apply_kmeans_image_tracing(draw_bounding_boxes_and_remove(holds_image),n_colors=n_colors,saturation_scale=1,value_scale=1)
     holds_image_masks = get_masks(holds_image)
+    processed_boxes = []
 
     results = predict_pose(state.video_path)
     print(results)
@@ -129,13 +136,26 @@ def upload_video(state):
                         com = (int(x.item()), int(y.item()))
                         for box in bounding_boxes:
                             if com[0] > box[0] and com[0] < box[0] + box[2] and com[1] > box[1] and com[1] < box[1] + box[3]:
-                                img = draw_square_at_bounding_box(box, img)
+                                img = draw_square_at_bounding_box(box, img, (255, 255, 255))
+                                if box not in processed_boxes:
+                                    processed_boxes.append(box)
             #cv2.imwrite(f'temp-{i}.jpg', overlay_image_alpha(img, holds_image_masks[mask_num], alpha=0.5))
             cv2.imwrite(f'temp-{i}.jpg', img)
-
+    
         state.in_process = f'temp-{i}.jpg'
         if os.path.exists(f"temp-{i-1}.jpg"):
             os.remove(f"temp-{i-1}.jpg")
+            
+    base = cv2.imread('base.jpg')
+    all_boxes = find_bounding_boxes_from_mask(holds_image_masks[1])
+    for box in all_boxes:
+        if box not in processed_boxes:
+            base = draw_square_at_bounding_box(box, base, (0, 0, 255))
+        else:
+            base = draw_square_at_bounding_box(box, base, (0, 255, 0))
+    cv2.imwrite("base.jpg", base)
+
+    state.out_utilized_holds= "base.jpg"
 
 if __name__ == "__main__":
     pages = {
