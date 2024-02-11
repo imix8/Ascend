@@ -6,6 +6,13 @@ __pycache__/
 # C extensions
 *.so
 
+.vscode/
+website/uploads/*
+website/runs/
+website/yolov8m-pose.pt
+website/*.jpg
+website/.data/
+
 # Distribution / packaging
 .Python
 build/
