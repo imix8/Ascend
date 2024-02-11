@@ -9,7 +9,7 @@ from taipy.gui import Gui, Markdown, notify
 from pages.root import *
 from models.pose import *
 import torch
-from ultralytics.engine.results import Results, Boxes, Masks, Probs, Keypoints
+import numpy as np
 import os
 import cv2
 from models.edge_detection import *
@@ -37,31 +37,23 @@ Video Download
 Give it a try by uploading a video to witness the intricacies of your climb! You can download the processed video in full quality from the sidebar to view. 🧗🏻
 <br/>
 
-
 ### Processing Video 📷 
- <|{in_process}|image|>
+<|{in_process}|image|>
+
+### Center of Mass 
+<|{com_img}|image|>
+
+### Missed Holds 
+<|{hold_img}|image|>
 
 |>
 |page>
 """
 
-
-# """
-# <|layout|columns=1 1|
-# <col1|card text-center|part|render={fixed}|
-# ### Processing Video 📷 
-# <|{in_process}|image|>
-# |col1>
-
-# <col2|card text-center|part|render={fixed}|
-# ### Processed Video 🔧 
-# <|{processed_video}|video|>
-# |col2>
-
-# |layout>
-# """
 video_path = ""
 in_process = ''
+com_img = ''
+hold_img = ''
 fixed = False
 home = Markdown(home_md)
 
@@ -72,10 +64,13 @@ def overlay_image_alpha(img1, img2, alpha=0.5):
     weighted_sum = cv2.addWeighted(img1, 1, img2, 1 - alpha, 0)
     return weighted_sum
 
-def plot_circle_at_xy(xy, image_path):
+def plot_circle_at_xy(xy, image):
     x, y = xy
-    image = cv2.imread(image_path)
     cv2.circle(image, (x, y), 10, (0, 0, 255), -1)
+    return image
+
+def plot_line_between_xy(xy1, xy2, image, color):
+    cv2.line(image, xy1, xy2, color, thickness=5)
     return image
 
 def draw_square_at_bounding_box(xy, image):
@@ -83,25 +78,13 @@ def draw_square_at_bounding_box(xy, image):
     cv2.rectangle(image, (x, y), (x + w, y + h), (255, 255, 255), 5)
     return image
 
-def begin_analyze(state):
-    results = predict_pose(state.video_path)
-    for i, r in enumerate(results):
-        im_array = r.plot()
-        im = Image.fromarray(im_array[..., ::-1])
-        im.save(f'temp-{i}.jpg')
-        state.in_process = f'temp-{i}.jpg'
-        if os.path.exists(f"temp-{i-1}.jpg"):
-            os.remove(f"temp-{i-1}.jpg")
-        print(r.path)
-    print(results)
-
 def upload_video(state):
     notify(state, 'info', 'Uploading original video...')
     notify(state, 'info', 'Processing climb...')
-    print(state.video_path)
 
     n_colors = 3
     holds_image = get_first_frame(state.video_path)
+    cv2.imwrite('base.jpg', holds_image)
     holds_image = apply_kmeans_image_tracing(holds_image, n_colors=n_colors)
     holds_image = apply_kmeans_image_tracing(draw_bounding_boxes_and_remove(holds_image),n_colors=n_colors,saturation_scale=1,value_scale=1)
     holds_image_masks = get_masks(holds_image)
@@ -111,17 +94,45 @@ def upload_video(state):
     for i, r in enumerate(results):
         keypoints_coords = r.keypoints.xy
         x_col = keypoints_coords[0][:, :1]
-        x_average = x_col[x_col != 0].mean()
+        non_zero_x = x_col[x_col != 0]
+        x_average = non_zero_x.mean()
         y_col = keypoints_coords[0][:, 1:]
-        y_average = y_col[y_col != 0].mean()
+        non_zero_y = y_col[y_col != 0]
+        print(non_zero_y)
+        
+        y_average = non_zero_y.mean()
         im_array = r.plot()
         im = Image.fromarray(im_array[..., ::-1])
         im.save(f'temp-{i}.jpg')
+        img = cv2.imread(f'temp-{i}.jpg')
+
+        base = cv2.imread("base.jpg")
+        im_array = r.plot(img=base, boxes=False)
+        im = Image.fromarray(im_array[..., ::-1])
+        im.save(f'base-{i}.jpg')
+        base = cv2.imread(f'base-{i}.jpg')
+        if (non_zero_y.size(dim=0) > 1) and (non_zero_x.size(dim=0) == non_zero_y.size(dim=0)):
+            maximum = np.argpartition(non_zero_y, -2)[-2:]
+            # draw foot line
+            xy1 = (int(non_zero_x[maximum][0]), int(non_zero_y[maximum][0]))
+            xy2 = (int(non_zero_x[maximum][1]), int(non_zero_y[maximum][1]))
+            base = plot_line_between_xy(xy1, xy2, base, (128, 128, 128))
+
 
         mask_num = 1
         if not (np.isnan(x_average) or np.isnan(y_average)):
             com = (int(x_average.item()), int(y_average.item()))
-            img = plot_circle_at_xy(com, f'temp-{i}.jpg')
+            img = plot_circle_at_xy(com, img)
+            base = plot_circle_at_xy(com, base)
+
+            # draw line from com to foot line
+            if (non_zero_y.size(dim=0) > 1) and (non_zero_x.size(dim=0) == non_zero_y.size(dim=0)):
+                xy2 = (int(x_average.item()), int(non_zero_y[maximum][0]))
+                x_max = np.sort(non_zero_x[maximum])
+                color = (0, 255, 0) if com[0] > x_max[0] and com[0] < x_max[1] else (0, 0, 255)
+                base = plot_line_between_xy(com, xy2, base, color)
+            
+
             bounding_boxes = find_bounding_boxes_from_mask(holds_image_masks[mask_num])
             for x in x_col:
                 for y in y_col:
@@ -132,10 +143,14 @@ def upload_video(state):
                                 img = draw_square_at_bounding_box(box, img)
             #cv2.imwrite(f'temp-{i}.jpg', overlay_image_alpha(img, holds_image_masks[mask_num], alpha=0.5))
             cv2.imwrite(f'temp-{i}.jpg', img)
+        
+        cv2.imwrite(f'base-{i}.jpg', base)
 
         state.in_process = f'temp-{i}.jpg'
+        state.com_img = f'base-{i}.jpg'
         if os.path.exists(f"temp-{i-1}.jpg"):
             os.remove(f"temp-{i-1}.jpg")
+            os.remove(f"base-{i-1}.jpg")
 
 if __name__ == "__main__":
     pages = {
